@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>River Vegetation & Water Index Viewer</title>
+    <!-- Leaflet core -->
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha512-p8OCdbYtPI0lzT2Ujag6rgIGb5gxBfXWlPgWd9I3eVNcqJ2cbunC9261qRUfU56R+zWl5BD7s8YsmA6JzDyDag=="
+      crossorigin=""
+    />
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha512-pMwrGmX1mPPxxbeq42adYB60J8oHJJRZ9j70F23aJk9NQ7FlUhJ/DXYBbG3Fkae8mtoraxwqNagu8Lb4pqdRoQ=="
+      crossorigin=""
+    ></script>
+    <!-- georaster & georaster-layer-for-leaflet -->
+    <script src="https://unpkg.com/georaster/dist/georaster.browser.min.js"></script>
+    <script src="https://unpkg.com/georaster-layer-for-leaflet/dist/georaster-layer-for-leaflet.min.js"></script>
+    <!-- UI libraries -->
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet" />
+    <script src="https://cdn.jsdelivr.net/npm/lucide@0.269.0/dist/umd/lucide.js"></script>
+    <style>
+      #map {
+        height: 80vh;
+      }
+    </style>
+  </head>
+  <body class="bg-gray-50 p-4">
+    <h1 class="text-2xl font-bold mb-4">River NDVI / NDWI Explorer</h1>
+
+    <div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-4">
+      <select id="river" class="p-2 rounded">
+        <option value="padma">Padma</option>
+        <!-- Add more rivers here -->
+      </select>
+      <select id="year" class="p-2 rounded">
+        <option value="2022">2022</option>
+        <!-- Extend as you add more years -->
+      </select>
+      <select id="quarter" class="p-2 rounded">
+        <option value="Q1">Q1</option>
+        <option value="Q2">Q2</option>
+        <option value="Q3">Q3</option>
+        <option value="Q4">Q4</option>
+      </select>
+      <select id="index" class="p-2 rounded">
+        <option value="NDVI">NDVI</option>
+        <option value="NDWI">NDWI</option>
+      </select>
+      <button id="load" class="bg-blue-600 text-white rounded px-4 py-2 flex items-center justify-center">
+        <span class="mr-2">Load Layer</span>
+        <svg id="loader" class="animate-spin h-5 w-5 hidden" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3.536-3.536A9 9 0 103.464 15.536L7 12H4z"></path></svg>
+      </button>
+    </div>
+
+    <div id="map" class="rounded shadow"></div>
+
+    <script>
+      // ------------------ Configuration ------------------
+      // Map dataset keys to file paths stored in /data
+      const DATA = {
+        padma: {
+          2022: {
+            Q1: { NDVI: "data/padma_2022_Q1_NDVI.tif", NDWI: "data/padma_2022_Q1_NDWI.tif" },
+            Q2: { NDVI: "data/padma_2022_Q2_NDVI.tif", NDWI: "data/padma_2022_Q2_NDWI.tif" },
+            Q3: { NDVI: "data/padma_2022_Q3_NDVI.tif", NDWI: "data/padma_2022_Q3_NDWI.tif" },
+            Q4: { NDVI: "data/padma_2022_Q4_NDVI.tif", NDWI: "data/padma_2022_Q4_NDWI.tif" },
+          },
+          // Extend: 2023, 2024 etc.
+        },
+        // Add more rivers (e.g., "jamuna", "meghna") similarly
+      };
+
+      // ------------------ Map Setup ------------------
+      const map = L.map("map").setView([23.7, 90.35], 7); // Center on Bangladesh
+
+      const street = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        attribution: "© OpenStreetMap contributors",
+      }).addTo(map);
+
+      const satellite = L.tileLayer(
+        "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        {
+          attribution: "© Esri & Contributors",
+        }
+      );
+
+      const baseMaps = {
+        Street: street,
+        Satellite: satellite,
+      };
+      L.control.layers(baseMaps, null, { position: "topright" }).addTo(map);
+
+      // Placeholder for the georaster layer
+      let rasterLayer;
+
+      // Utility to show/hide loader
+      function toggleLoader(show) {
+        document.getElementById("loader").classList[show ? "remove" : "add"]("hidden");
+      }
+
+      // ------------------ Load Button ------------------
+      document.getElementById("load").addEventListener("click", async () => {
+        const river = document.getElementById("river").value;
+        const year = document.getElementById("year").value;
+        const quarter = document.getElementById("quarter").value;
+        const index = document.getElementById("index").value;
+
+        const fileUrl = DATA?.[river]?.[year]?.[quarter]?.[index];
+        if (!fileUrl) {
+          alert("Dataset not found. Check DATA mapping or upload file.");
+          return;
+        }
+
+        try {
+          toggleLoader(true);
+          const response = await fetch(fileUrl);
+          const arrayBuffer = await response.arrayBuffer();
+          const georaster = await parseGeoraster(arrayBuffer);
+
+          // Remove existing raster layer, if any
+          if (rasterLayer) {
+            map.removeLayer(rasterLayer);
+          }
+
+          rasterLayer = new GeoRasterLayer({
+            georaster,
+            opacity: 0.75,
+            resolution: 256,
+          });
+
+          rasterLayer.addTo(map);
+          map.fitBounds(rasterLayer.getBounds());
+        } catch (err) {
+          console.error(err);
+          alert("Error loading raster. Check browser console for details.");
+        } finally {
+          toggleLoader(false);
+        }
+      });
+    </script>
+  </body>
+</html>
